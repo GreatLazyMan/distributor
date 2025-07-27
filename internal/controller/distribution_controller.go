@@ -18,9 +18,9 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"os"
 
-	"github.com/redis/go-redis/v9"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -29,16 +29,20 @@ import (
 
 	distributorv1 "github.com/GreatLazyMan/distributor/api/v1"
 	"github.com/GreatLazyMan/distributor/utils/constant"
+	"github.com/GreatLazyMan/distributor/utils/globalmetadatastorage"
+	"github.com/GreatLazyMan/distributor/utils/localdir"
 	"github.com/GreatLazyMan/distributor/utils/localmetastorage"
 )
 
 var (
 	controllerLog = ctrl.Log.WithName("controller")
 	nodeName      = ""
+	podIP         = ""
 )
 
 func init() {
 	nodeName = os.Getenv(constant.NodeNameEnvKey)
+	podIP = os.Getenv(constant.PodIPKey)
 }
 
 // DistributionReconciler reconciles a Distribution object
@@ -48,8 +52,9 @@ type DistributionReconciler struct {
 	RedisHost    string
 	RedisPort    string
 	RedisPass    string
-	RedisClient  *redis.Client
+	RedisClient  *globalmetadatastorage.RedisEngine
 	SqliteClient *localmetastorage.SqliteEngine
+	FileManager  *localdir.FileManeger
 }
 
 // +kubebuilder:rbac:groups=distributor.distributor.io,resources=distributions,verbs=get;list;watch;create;update;patch;delete
@@ -84,22 +89,97 @@ func (r *DistributionReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	if distribution.Spec.SourceNode == nodeName {
-		info := r.ReadLocalFileInfo(distribution.Spec.TargetDir)
-		for k, v := range info {
-			r.RegisterFileInfo(k, v)
+		info, err := r.ReadLocalFileInfo(distribution.Spec.TargetDir)
+		if err != nil {
+			controllerLog.Error(err, "read local dir %s error", distribution.Spec.TargetDir)
+			return ctrl.Result{}, err
+		}
+		if len(info) > 0 {
+			err = r.RegisterFileInfo(info)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		streamMessage := make([]map[string]string, 0)
+		for filename, fl := range info {
+			realName := constant.GetRealName(filename)
+			streamMessageEle := make(map[string]string)
+			streamMessageEle[localmetastorage.ChecksumTypeKey] = localmetastorage.ChecksumTypeMd5
+			streamMessageEle[localmetastorage.FileNameKey] = filename
+			streamMessageEle[localmetastorage.ChecksumKey] = fl.Checksum
+			streamMessageEle[localmetastorage.DownloadFileKey] = fmt.Sprintf("http://%s:%s%s", podIP, constant.WebPort, realName)
+		}
+		err = r.RedisClient.ProduceMessage(distribution.Spec.TargetDir, streamMessage...)
+		if err != nil {
+			return ctrl.Result{}, err
 		}
 	} else {
+		messageChan, err := r.RedisClient.ConsumeMessage(distribution.Spec.TargetDir)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		for message := range messageChan {
+			filename := message[localmetastorage.FileNameKey].(string)
+			downloadUrl := message[localmetastorage.DownloadFileKey].(string)
+			// TODO: 检查本地
+			err := r.GetRemoteFile(filename, downloadUrl)
+			if err != nil {
+				return ctrl.Result{}, nil
+			}
+		}
 	}
 
 	return ctrl.Result{}, nil
 }
 
-func (r *DistributionReconciler) ReadLocalFileInfo(targetdir string) map[string]string {
+func (r *DistributionReconciler) GetRemoteFile(filename, downloadUrl string) error {
 	return nil
 }
 
-func (r *DistributionReconciler) RegisterFileInfo(k, v string) {
+func (r *DistributionReconciler) ReadLocalFileInfo(targetdir string) (map[string]localmetastorage.FileInfo, error) {
+	res := make(map[string]localmetastorage.FileInfo)
+	fileList, err := r.FileManager.ListFiles(targetdir)
+	for _, fileName := range fileList {
+		fileListRes, err := r.SqliteClient.FindLocalFile(fileName)
+		if err != nil && len(fileListRes) > 1 {
+			controllerLog.Error(err, "find local file %s error", fileName)
+			return res, err
+		}
+		if len(fileListRes) == 1 {
+			res[fileName] = fileListRes[0]
+		} else {
+			realName := constant.GetRealName(fileName)
+			md5sum, err := r.FileManager.CalculateMD5(realName)
+			if err != nil {
+				controllerLog.Error(err, "cal md5sum %s error", fileName)
+				return res, err
+			}
+			fl := localmetastorage.FileInfo{
+				LocalFileName: fileName,
+				ChecksumType:  localmetastorage.ChecksumTypeMd5,
+				Checksum:      md5sum,
+				LocalDir:      targetdir,
+			}
+			err = r.SqliteClient.CreateFileInfo(&fl)
+			if err != nil {
+				controllerLog.Error(err, "create fileinfo %s error", fileName)
+				return res, err
+			}
+			res[fileName] = fl
+		}
+	}
+	return res, err
+}
 
+func (r *DistributionReconciler) RegisterFileInfo(mfl map[string]localmetastorage.FileInfo) error {
+	for _, v := range mfl {
+		err := r.SqliteClient.CreateFileInfo(&v)
+		if err != nil {
+			controllerLog.Error(err, "create fileinfo %v in sqllite error", v)
+			return err
+		}
+	}
+	return nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -109,6 +189,8 @@ func (r *DistributionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 	r.SqliteClient = db
+	r.FileManager = localdir.NewFileManager()
+	r.RedisClient = globalmetadatastorage.NewRedisClient(r.RedisHost, r.RedisPort, r.RedisPass)
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&distributorv1.Distribution{}).
 		Named("distribution").

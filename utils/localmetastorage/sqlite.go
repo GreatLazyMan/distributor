@@ -12,7 +12,14 @@ var (
 	sqliteLog = ctrl.Log.WithName("sqlite")
 )
 
-const SqliteDatabase string = "/opt/distributor.db"
+const (
+	SqliteDatabase  = "/opt/distributor.db"
+	ChecksumTypeMd5 = "md5sum"
+	ChecksumTypeKey = "checksumtype"
+	ChecksumKey     = "checksum"
+	FileNameKey     = "filename"
+	DownloadFileKey = "downloadurl"
+)
 
 type SqliteEngine struct {
 	*gorm.DB
@@ -69,6 +76,27 @@ func (s *SqliteEngine) findFileByDir(field, dir string) ([]FileInfo, error) {
 	res := s.Where(fmt.Sprintf("%s = ?", field), dir).Find(files)
 	if res.Error != nil {
 		sqliteLog.Error(res.Error, "select file where dir = %s error", dir)
+		return nil, res.Error
+	}
+	return files, res.Error
+}
+
+func (s *SqliteEngine) FindLocalFile(localfilename string) ([]FileInfo, error) {
+	var files []FileInfo
+	res := s.Where("localfilename = ?", localfilename).Find(files)
+	if res.Error != nil {
+		sqliteLog.Error(res.Error, "select file where localfilename = %s error", localfilename)
+		return nil, res.Error
+	}
+	return files, res.Error
+}
+
+// TODO: 核对md5值
+func (s *SqliteEngine) CheckLocalFile(localfilename string) ([]FileInfo, error) {
+	var files []FileInfo
+	res := s.Where("localfilename = ?", localfilename).Find(files)
+	if res.Error != nil {
+		sqliteLog.Error(res.Error, "select file where localfilename = %s error", localfilename)
 		return nil, res.Error
 	}
 	return files, res.Error

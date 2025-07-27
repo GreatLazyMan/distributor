@@ -20,7 +20,7 @@ const (
 	FileNameKey     = "filename"
 	CheckSumKey     = "checksum"
 	CheckSumTypeKey = "checksumtype"
-	StreamName      = "stream:events"
+	StreamPrefix    = "stream:events"
 	EOFKey          = "EOF"
 )
 
@@ -46,31 +46,35 @@ func NewRedisClient(redisHost, redisPort, redisPass string) *RedisEngine {
 	return &RedisEngine{redisClient}
 }
 
-func (r *RedisEngine) ProduceMessage(ms ...map[string]string) {
+func (r *RedisEngine) ProduceMessage(streamName string, ms ...map[string]string) error {
 	ctx := context.Background()
 	for m := range ms {
 		_, err := r.XAdd(ctx, &redis.XAddArgs{
-			Stream: StreamName,
+			Stream: fmt.Sprintf("%s:%s", StreamPrefix, streamName),
 			Values: m,
 		}).Result()
 		if err != nil {
 			redisLog.Error(err, "add redis message  %v error", m)
+			return err
 		}
 	}
+	return nil
 }
 
-func (r *RedisEngine) ConsumeMessage() chan map[string]interface{} {
+func (r *RedisEngine) ConsumeMessage(streamName string) (chan map[string]interface{}, error) {
 
 	ctx := context.Background()
 
 	groupName := nodeName
 	consumerName := fmt.Sprintf("%s-%d", nodeName, os.Getpid()) // 使用进程 ID 作为消费者名称
 
+	StreamName := fmt.Sprintf("%s:%s", StreamPrefix, streamName)
 	// 创建消费者组（只需执行一次）
 	err := r.XGroupCreateMkStream(ctx, StreamName, groupName, "0").Err()
 	if err != nil {
 		if err != redis.Nil { // 如果组已存在，redis.Nil 错误是正常的
 			redisLog.Error(err, "create consumer group %s error", groupName)
+			return nil, err
 		}
 	}
 
@@ -95,7 +99,7 @@ func (r *RedisEngine) ConsumeMessage() chan map[string]interface{} {
 		}
 	}()
 
-	return consumeChan
+	return consumeChan, nil
 }
 
 func (r *RedisEngine) processPendingMessages(ctx context.Context, groupName, consumerName, streamKey string,
@@ -146,6 +150,7 @@ func (r *RedisEngine) processPendingMessages(ctx context.Context, groupName, con
 					consumeChan <- msg.Values
 
 					// 确认消息处理完成
+					// TODO: 应该reconsile中处理完成后返回确认是否ACK
 					_, err := r.XAck(ctx, streamKey, groupName, msg.ID).Result()
 					if err != nil {
 						redisLog.Error(err, " ack message error ID=%s: error", msg.ID)
