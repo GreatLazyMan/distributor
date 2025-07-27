@@ -69,6 +69,13 @@ func main() {
 		"If set, the metrics endpoint is served securely via HTTPS. Use --metrics-secure=false to use HTTP instead.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	// for Distribution controller
+	var redisHost string
+	var redisPort string
+	var redisPassword string
+	flag.StringVar(&redisHost, "redis-host", "redis", "redis host")
+	flag.StringVar(&redisPort, "redis-port", "6379", "redis port")
+	flag.StringVar(&redisPassword, "redis-password", "", "redis password")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -143,8 +150,11 @@ func main() {
 	}
 
 	if err = (&controller.DistributionReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		RedisHost: redisHost,
+		RedisPort: redisPort,
+		RedisPass: redisPassword,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Distribution")
 		os.Exit(1)

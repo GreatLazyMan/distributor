@@ -29,7 +29,8 @@ type DistributionSpec struct {
 	// Important: Run "make" to regenerate code after modifying this file
 
 	// Foo is an example field of Distribution. Edit distribution_types.go to remove/update
-	Foo string `json:"foo,omitempty"`
+	TargetDir  string `json:"targetdir,omitempty"`
+	SourceNode string `json:"sourcenode,omitempty"`
 }
 
 // DistributionStatus defines the observed state of Distribution.

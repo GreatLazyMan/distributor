@@ -18,19 +18,38 @@ package controller
 
 import (
 	"context"
+	"os"
 
+	"github.com/redis/go-redis/v9"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	distributorv1 "github.com/GreatLazyMan/distributor/api/v1"
+	"github.com/GreatLazyMan/distributor/utils/constant"
+	"github.com/GreatLazyMan/distributor/utils/localmetastorage"
 )
+
+var (
+	controllerLog = ctrl.Log.WithName("controller")
+	nodeName      = ""
+)
+
+func init() {
+	nodeName = os.Getenv(constant.NodeNameEnvKey)
+}
 
 // DistributionReconciler reconciles a Distribution object
 type DistributionReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme       *runtime.Scheme
+	RedisHost    string
+	RedisPort    string
+	RedisPass    string
+	RedisClient  *redis.Client
+	SqliteClient *localmetastorage.SqliteEngine
 }
 
 // +kubebuilder:rbac:groups=distributor.distributor.io,resources=distributions,verbs=get;list;watch;create;update;patch;delete
@@ -50,12 +69,46 @@ func (r *DistributionReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	_ = log.FromContext(ctx)
 
 	// TODO(user): your logic here
+	distribution := &distributorv1.Distribution{}
+	if err := r.Get(ctx, req.NamespacedName, distribution, &client.GetOptions{
+		Raw: &metav1.GetOptions{
+			ResourceVersion: "0",
+		},
+	}); err != nil {
+		controllerLog.Error(err, "distribution %v not found", req.NamespacedName)
+		return ctrl.Result{}, err
+	}
+	if !distribution.DeletionTimestamp.IsZero() {
+		controllerLog.Info("distribution %v is deleting", req.NamespacedName)
+		return ctrl.Result{}, nil
+	}
+
+	if distribution.Spec.SourceNode == nodeName {
+		info := r.ReadLocalFileInfo(distribution.Spec.TargetDir)
+		for k, v := range info {
+			r.RegisterFileInfo(k, v)
+		}
+	} else {
+	}
 
 	return ctrl.Result{}, nil
 }
 
+func (r *DistributionReconciler) ReadLocalFileInfo(targetdir string) map[string]string {
+	return nil
+}
+
+func (r *DistributionReconciler) RegisterFileInfo(k, v string) {
+
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *DistributionReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	db, err := localmetastorage.InitSqliteDatabase()
+	if err != nil {
+		return err
+	}
+	r.SqliteClient = db
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&distributorv1.Distribution{}).
 		Named("distribution").
