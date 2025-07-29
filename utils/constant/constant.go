@@ -1,13 +1,27 @@
 package constant
 
-import "path/filepath"
+import (
+	"os"
+	"path/filepath"
+)
 
 const (
 	DataDir        = "/data"
 	NodeNameEnvKey = "NODE_NAME"
 	PodIPKey       = "POD_IP"
-	WebPort        = "47280"
+	// TODO: 端口应该作为可修改的参数
+	WebPort = "47280"
 )
+
+var (
+	PodIP    = ""
+	NodeName = ""
+)
+
+func init() {
+	PodIP = os.Getenv(PodIPKey)
+	NodeName = os.Getenv(NodeNameEnvKey)
+}
 
 type DownloadFileInfo struct {
 	DownloadUrl string

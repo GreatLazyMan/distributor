@@ -22,6 +22,10 @@ const (
 	CheckSumTypeKey = "checksumtype"
 	StreamPrefix    = "stream:events"
 	EOFKey          = "EOF"
+	lockExpiration  = 10 * time.Second       // 锁的过期时间，防止死锁
+	retryInterval   = 200 * time.Millisecond // 重试间隔
+	maxRetries      = 5                      // 最大重试次数
+	MaxConnection   = 4
 )
 
 var (
@@ -199,4 +203,106 @@ func (r *RedisEngine) consumeMessages(ctx context.Context, groupName, consumerNa
 			}
 		}
 	}
+}
+
+// 获取分布式锁
+func (r *RedisEngine) acquireLock(ctx context.Context, lockKey string) (bool, error) {
+	// 使用 SETNX 原子操作获取锁，设置过期时间防止死锁
+	acquired, err := r.SetNX(ctx, lockKey, "1", lockExpiration).Result()
+	return acquired, err
+}
+
+// 带超时的阻塞锁
+func (r *RedisEngine) acquireLockWithTimeout(ctx context.Context, timeout time.Duration, lockKey string) (bool, error) {
+	deadline := time.Now().Add(timeout)
+
+	for time.Now().Before(deadline) {
+		acquired, err := r.SetNX(ctx, lockKey, "1", lockExpiration).Result()
+		if err != nil {
+			return false, err
+		}
+		if acquired {
+			return true, nil
+		}
+		time.Sleep(retryInterval)
+	}
+
+	return false, nil // 超时返回
+}
+
+// 释放分布式锁
+func (r *RedisEngine) releaseLock(ctx context.Context, lockKey string) error {
+	return r.Del(ctx, lockKey).Err()
+}
+
+// 带重试的锁获取
+func (r *RedisEngine) acquireLockWithRetry(ctx context.Context, lockKey string) (bool, error) {
+	var retries int
+	for {
+		acquired, err := r.acquireLock(ctx, lockKey)
+		if err != nil {
+			return false, err
+		}
+		if acquired {
+			return true, nil
+		}
+
+		retries++
+		if retries > maxRetries {
+			return false, fmt.Errorf("get lock timeout, retriy times: %d", retries)
+		}
+
+		// 等待一段时间后重试
+		time.Sleep(retryInterval)
+	}
+}
+
+// 带重试机制的 Pipeline 执行函数
+func (r *RedisEngine) executePipelineWithRetry(ctx context.Context, fn func(pipe redis.Pipeliner) error, maxRetries int) error {
+	var lastErr error
+
+	for i := 0; i <= maxRetries; i++ {
+		if i > 0 {
+			// 重试前等待一段时间（指数退避）
+			backoff := time.Duration(100*i) * time.Millisecond
+			time.Sleep(backoff)
+			fmt.Printf("Pipeline 执行失败，正在重试 (%d/%d)...\n", i, maxRetries)
+		}
+
+		pipe := r.TxPipeline()
+		if err := fn(pipe); err != nil {
+			lastErr = fmt.Errorf("构建 Pipeline 失败: %w", err)
+			continue
+		}
+
+		_, err := pipe.Exec(ctx)
+		if err == nil {
+			return nil // 执行成功
+		}
+
+		lastErr = fmt.Errorf("执行 Pipeline 失败: %w", err)
+	}
+
+	return fmt.Errorf("重试 %d 次后仍然失败: %w", maxRetries, lastErr)
+}
+
+func (r *RedisEngine) updateLeaderboard(ctx context.Context, filePath string) error {
+	// 获取锁
+	lockkey := fmt.Sprintf("lock:%s", filePath)
+	acquired, err := r.acquireLockWithRetry(ctx, lockkey)
+	if err != nil {
+		return fmt.Errorf("get lock %s error: %v", lockkey, err)
+	}
+	if !acquired {
+		return fmt.Errorf("get lock %s timeout", lockkey)
+	}
+	defer r.releaseLock(ctx, lockkey) // 确保锁最终被释放
+
+	downloadUrl := fmt.Sprintf("http://%s:%s/download/%s", constant.PodIP, constant.WebPort, filePath)
+	// 执行带重试的 Pipeline
+	return r.executePipelineWithRetry(ctx, func(pipe redis.Pipeliner) error {
+		// 定义 Pipeline 中的操作
+		pipe.ZAdd(ctx, filePath, redis.Z{Score: MaxConnection, Member: downloadUrl})
+		return nil
+	}, 3) // 最多重试 3 次
 }
