@@ -3,6 +3,7 @@ package localdir
 import (
 	"crypto/md5"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -73,6 +74,29 @@ func (f *FileManeger) CalculateMD5(filePath string) (string, error) {
 
 // 检查文件 MD5 是否与预期一致
 func (f *FileManeger) CheckMD5(filePath string, expectedMD5 string) (bool, error) {
+	fileInfo, err := os.Stat(filePath)
+	if err != nil {
+		return false, fmt.Errorf("file %s found error: %v", filePath, err)
+	}
+
+	// 获取文件模式
+	mode := fileInfo.Mode()
+
+	// 判断路径类型
+	switch {
+	case mode.IsDir():
+		return false, fmt.Errorf("%s is dir", filePath)
+	case mode.IsRegular():
+	case (mode & os.ModeSymlink) != 0:
+		return false, fmt.Errorf("%s is symbol link", filePath)
+	case (mode & os.ModeDevice) != 0:
+		return false, fmt.Errorf("%s is device", filePath)
+	case (mode & os.ModeNamedPipe) != 0:
+		return false, fmt.Errorf("%s is NamedPipe", filePath)
+	default:
+		return false, fmt.Errorf("%s is unkown type %s", filePath, mode.String())
+	}
+
 	md5Sum, err := f.CalculateMD5(filePath)
 	if err != nil {
 		return false, err

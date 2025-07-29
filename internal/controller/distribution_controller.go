@@ -121,10 +121,32 @@ func (r *DistributionReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		for message := range messageChan {
 			filename := message[localmetastorage.FileNameKey].(string)
 			downloadUrl := message[localmetastorage.DownloadFileKey].(string)
-			// TODO: 检查本地
-			err := r.GetRemoteFile(filename, downloadUrl)
+			checksumType := message[localmetastorage.ChecksumTypeKey].(string)
+			checksum := message[localmetastorage.ChecksumKey].(string)
+			lf, err := r.SqliteClient.FindLocalFile(filename)
 			if err != nil {
-				return ctrl.Result{}, nil
+				return ctrl.Result{}, err
+			}
+			if len(lf) > 1 {
+				return ctrl.Result{}, fmt.Errorf("more than 1 record in sqlite for %s", filename)
+			}
+			if len(lf) == 0 {
+				if checksumType == localmetastorage.ChecksumTypeMd5 {
+					flag, err := r.FileManager.CheckMD5(filename, checksum)
+					if err != nil {
+						controllerLog.Error(err, "calculate %s MD5 error", filename)
+						return ctrl.Result{}, err
+					}
+					if !flag {
+						err = r.GetRemoteFile(filename, downloadUrl)
+						if err != nil {
+							return ctrl.Result{}, err
+						}
+					}
+					// TODO:检查数据库里的数据,数据库里存在数据则认为文件存在
+				} else {
+					return ctrl.Result{}, fmt.Errorf("not support checksumType %s", checksumType)
+				}
 			}
 		}
 	}
