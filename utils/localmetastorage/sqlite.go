@@ -3,7 +3,8 @@ package localmetastorage
 import (
 	"fmt"
 
-	"gorm.io/driver/sqlite"
+	//"gorm.io/driver/sqlite"
+	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 	ctrl "sigs.k8s.io/controller-runtime"
 )
@@ -13,7 +14,7 @@ var (
 )
 
 const (
-	SqliteDatabase  = "/opt/distributor.db"
+	SqliteDatabase  = "/data/distributor.db"
 	ChecksumTypeMd5 = "md5sum"
 	ChecksumTypeKey = "checksumtype"
 	ChecksumKey     = "checksum"
@@ -29,7 +30,7 @@ type SqliteEngine struct {
 type FileInfo struct {
 	gorm.Model
 	LocalFileName string `gorm:"column:localfilename,uniqueIndex"`
-	LocalDir      string `gorm:"column:localdir.index:dir_idx"`
+	LocalDir      string `gorm:"column:localdir,index:dir_idx"`
 	RemoteDIr     string `gorm:"column:remotedir"`
 	Checksum      string `gorm:"column:checksum"`
 	ChecksumType  string `gorm:"column,checksumtype"`

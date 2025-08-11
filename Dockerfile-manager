@@ -1,6 +1,6 @@
 FROM gcr.io/distroless/static:nonroot
 WORKDIR /
 ADD ./bin/manager  /
-USER 65532:65532
+USER root
 
 ENTRYPOINT ["/manager"]
