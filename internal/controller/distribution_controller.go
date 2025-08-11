@@ -89,17 +89,14 @@ func (r *DistributionReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	if distribution.Spec.SourceNode == nodeName {
+		// 需要同步的是本节点的文件
+		// 读取本地文件，并检查sqllite中的数据，查不到则插入数据登记到sqlite中
 		info, err := r.ReadLocalFileInfo(distribution.Spec.TargetDir)
 		if err != nil {
 			controllerLog.Error(err, "read local dir %s error", distribution.Spec.TargetDir)
 			return ctrl.Result{}, err
 		}
-		if len(info) > 0 {
-			err = r.RegisterFileInfo(info)
-			if err != nil {
-				return ctrl.Result{}, err
-			}
-		}
+		// 登记信息到redis中
 		streamMessage := make([]map[string]string, 0)
 		for filename, fl := range info {
 			realName := constant.GetRealName(filename)
@@ -114,6 +111,8 @@ func (r *DistributionReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			return ctrl.Result{}, err
 		}
 	} else {
+		// 需要从远端节点同步数据
+		// 目标目录作为消息队列的topic，消费数据
 		messageChan, err := r.RedisClient.ConsumeMessage(distribution.Spec.TargetDir)
 		if err != nil {
 			return ctrl.Result{}, err

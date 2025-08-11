@@ -39,7 +39,9 @@ spec:
           spec:
             description: DistributionSpec defines the desired state of Distribution.
             properties:
-              foo:
+              sourcenode:
+                type: string
+              targetdir:
                 description: Foo is an example field of Distribution. Edit distribution_types.go
                   to remove/update
                 type: string
